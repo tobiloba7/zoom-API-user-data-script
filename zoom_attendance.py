@@ -156,7 +156,7 @@ class Zoom:
         except requests.exceptions.HTTPError as e:
             print(f"Error fetching meeting instances: {response.text}")
             if response.status_code == 400:
-                print("Bad Request: Please check if the meeting ID is correct and if it is a recurring meeting.")
+                print("Bad Request")
             raise e
         
     def get_meeting_attendance(self, meeting_date=None):
