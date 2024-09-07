@@ -120,27 +120,45 @@ class Zoom:
                 print("Bad Request: Check if the meeting ID is correct and if it is a completed meeting.")
             raise e
 
-    def get_meeting_participants(self, meeting_id, is_instance=False):
-        if is_instance:
-            meeting_id = urllib.parse.quote(urllib.parse.quote(meeting_id, safe=''))  # Handle instances if needed
-        else:
-            # Check if a UUID format is required
-            try:
-                meeting_details = self.get_meeting_details(meeting_id)  # Validate meeting details first
-                meeting_id = meeting_details.get('uuid', meeting_id)  # Use UUID if available and required
-            except Exception as e:
-                print(f"Could not retrieve meeting details: {e}")
+    def get_meeting_participants(self, meeting_id):
+        # Fetch meeting instances to get the correct UUID for completed meetings
+        try:
+            instances = self.get_meeting_instances(meeting_id)
+            if not instances:
+                print(f"No instances found for meeting ID {meeting_id}. Ensure the meeting is completed and try again.")
                 return []
+            
+            # Use the UUID of the last (or desired) instance
+            meeting_uuid = instances[-1].get('uuid')
+            print(f"Using UUID for meeting instance: {meeting_uuid}")
+        except Exception as e:
+            print(f"Could not retrieve meeting instances: {e}")
+            return []
 
-        response_data = self._get_meeting_participants_json(meeting_id=meeting_id)
-        meeting_data = response_data.get("participants", [])
-        next_page_token = response_data.get("next_page_token")
-        while next_page_token:
-            data = self._get_meeting_participants_json(meeting_id=meeting_id, next_page_token=next_page_token)
-            meeting_data += data.get("participants", [])
-            next_page_token = data.get("next_page_token")
+        # Properly encode the UUID (once, not double-encoded)
+        meeting_uuid = urllib.parse.quote(meeting_uuid, safe='')
 
-        return meeting_data
+        # Build the endpoint correctly
+        self.endpoint = f"/report/meetings/{meeting_uuid}/participants"
+        url = self.base_url + self.endpoint
+        self.headers = {
+            'Authorization': f'Bearer {self.access_token}'
+        }
+
+        print(f"Fetching participants from URL: {url}")
+
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()  # Raises an exception for HTTP errors
+            return response.json().get("participants", [])
+        except requests.exceptions.HTTPError as e:
+            print(f"Error fetching participants for meeting {meeting_uuid}: {response.text}")
+            if response.status_code == 404:
+                print("Meeting not found: This could be due to incorrect meeting UUID or the meeting not existing/completed.")
+            elif response.status_code == 3001:
+                print(f"Meeting does not exist: {meeting_uuid}. Check if the UUID is correct and if the meeting is completed.")
+            raise e
+
     
     def get_meeting_instances(self, meeting_id):
         self.endpoint = f"/past_meetings/{meeting_id}/instances"
@@ -159,6 +177,72 @@ class Zoom:
                 print("Bad Request")
             raise e
         
+    # def get_meeting_attendance(self, meeting_date=None):
+    #     meetings = self.get_all_meetings()
+
+    #     if not meetings:
+    #         print("No meetings found.")
+    #         return
+
+    #     meeting_df = pd.DataFrame(meetings)
+    #     print("Columns in DataFrame:", meeting_df.columns)
+
+    #     if 'start_time' not in meeting_df.columns:
+    #         print("Error: 'start_time' column is missing.")
+    #         print("Available columns:", meeting_df.columns)
+    #         return
+
+    #     # Convert start_time to datetime with West Central Africa Time (WAT) timezone
+    #     meeting_df['start_time'] = pd.to_datetime(meeting_df['start_time']).dt.tz_convert('Africa/Lagos')  # WAT is typically represented by 'Africa/Lagos'
+
+    #     # Extract the meeting date
+    #     meeting_df['meeting_date'] = meeting_df['start_time'].dt.date
+
+    #     # If meeting_date is not provided, use the current date in the desired timezone
+    #     if meeting_date:
+    #         current_date = pd.to_datetime(meeting_date).date()  # Use specified date
+    #     else:
+    #         desired_timezone = pytz.timezone('Africa/Lagos')  # West Central Africa Time
+    #         current_datetime = datetime.now(desired_timezone)
+    #         current_date = current_datetime.date()
+
+    #     print(f"Filtering meetings for date: {current_date}")
+    #     print("Available meeting dates:", meeting_df['meeting_date'].unique())
+
+    #     # Filter the DataFrame for matching dates
+    #     filtered_row = meeting_df[meeting_df['meeting_date'] == current_date]
+
+    #     if filtered_row.empty:
+    #         print(f"No meetings scheduled for the specified date: {current_date}.")
+    #         return
+
+    #     # Process each filtered meeting
+    #     result = pd.DataFrame()
+    #     for i in range(len(filtered_row)):
+    #         meeting_to_process = filtered_row.iloc[i]
+    #         meeting_id = meeting_to_process['id']
+    #         topic = meeting_to_process['topic']
+    #         meeting_date = meeting_to_process['meeting_date']
+    #         meeting_duration = meeting_to_process['duration']
+    #         start_time = meeting_to_process['start_time']
+    #         attendance = self.get_meeting_participants(meeting_id)
+
+    #         # Combine meeting details with participant data
+    #         attendance_combined = [{**item, 'Topic': topic, 'meeting_date': meeting_date,
+    #                                 'meeting_duration': meeting_duration, 'start_time': start_time}
+    #                             for item in attendance]
+    #         attendance_combined = pd.DataFrame(attendance_combined)
+
+    #         # Process leave_time and calculate the maximum end_time
+    #         if 'leave_time' in attendance_combined.columns:
+    #             attendance_combined['leave_time'] = pd.to_datetime(attendance_combined['leave_time'])
+    #             attendance_combined['end_time'] = attendance_combined['leave_time'].max()
+
+    #         # Append the combined data to the result DataFrame
+    #         result = pd.concat([result, attendance_combined], ignore_index=True)
+
+    #     return result
+
     def get_meeting_attendance(self, meeting_date=None):
         meetings = self.get_all_meetings()
 
@@ -175,16 +259,16 @@ class Zoom:
             return
 
         # Convert start_time to datetime with West Central Africa Time (WAT) timezone
-        meeting_df['start_time'] = pd.to_datetime(meeting_df['start_time']).dt.tz_convert('Africa/Lagos')  # WAT is typically represented by 'Africa/Lagos'
+        meeting_df['start_time'] = pd.to_datetime(meeting_df['start_time']).dt.tz_convert('Africa/Lagos')
 
         # Extract the meeting date
         meeting_df['meeting_date'] = meeting_df['start_time'].dt.date
 
         # If meeting_date is not provided, use the current date in the desired timezone
         if meeting_date:
-            current_date = pd.to_datetime(meeting_date).date()  # Use specified date
+            current_date = pd.to_datetime(meeting_date).date()
         else:
-            desired_timezone = pytz.timezone('Africa/Lagos')  # West Central Africa Time
+            desired_timezone = pytz.timezone('Africa/Lagos')
             current_datetime = datetime.now(desired_timezone)
             current_date = current_datetime.date()
 
@@ -200,6 +284,7 @@ class Zoom:
 
         # Process each filtered meeting
         result = pd.DataFrame()
+        session_details = []
         for i in range(len(filtered_row)):
             meeting_to_process = filtered_row.iloc[i]
             meeting_id = meeting_to_process['id']
@@ -207,26 +292,41 @@ class Zoom:
             meeting_date = meeting_to_process['meeting_date']
             meeting_duration = meeting_to_process['duration']
             start_time = meeting_to_process['start_time']
+            host_name = meeting_to_process['host_id']  # Assuming host name is available in host_id or another field
+
+            # Fetch participants for each meeting
             attendance = self.get_meeting_participants(meeting_id)
 
             # Combine meeting details with participant data
-            attendance_combined = [{**item, 'Topic': topic, 'meeting_date': meeting_date,
-                                    'meeting_duration': meeting_duration, 'start_time': start_time}
+            attendance_combined = [{**item, 'Session Title': topic, 'Session Date and Time': start_time,
+                                    'Session ID': meeting_id, 'Host Name': host_name, 
+                                    'meeting_date': meeting_date, 'meeting_duration': meeting_duration, 
+                                    'start_time': start_time}
                                 for item in attendance]
             attendance_combined = pd.DataFrame(attendance_combined)
-
-            # Process leave_time and calculate the maximum end_time
-            if 'leave_time' in attendance_combined.columns:
-                attendance_combined['leave_time'] = pd.to_datetime(attendance_combined['leave_time'])
-                attendance_combined['end_time'] = attendance_combined['leave_time'].max()
 
             # Append the combined data to the result DataFrame
             result = pd.concat([result, attendance_combined], ignore_index=True)
 
+            # Create detailed session information
+            session_info = {
+                'Session Title': topic,
+                'Session Date and Time': start_time,
+                'Session ID': meeting_id,
+                'Host Name': host_name
+            }
+            session_details.append(session_info)
+
+        print("Session Details:")
+        for session in session_details:
+            print(f"Session Title: {session['Session Title']}")
+            print(f"Session Date and Time: {session['Session Date and Time']}")
+            print(f"Session ID: {session['Session ID']}")
+            print(f"Host Name: {session['Host Name']}")
+            print("\n")
+
         return result
-
-
 # Replace the credentials with your actual Zoom API credentials
-zoom_instance = Zoom(client_id='YX1hPaIGRxSJmIpTjjCiIQ', client_secret='GcK62zYkWphDyXOFeuMFIVE2qFYYDBnr', account_id='PncShf-GReaX-pPDjJa7jQ')
+zoom_instance = Zoom(client_id='ujqRRTR5Qey_e7oIAF3oMw', client_secret='9qfonnzQwiLDCsNO9xjrYR47BJOlg9SQ', account_id='WE69OOT2TFaXpWXLtGo7gg')
 data = zoom_instance.get_meeting_attendance()
 print(data)
