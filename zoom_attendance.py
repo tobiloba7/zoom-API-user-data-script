@@ -397,7 +397,7 @@ def send_zoom_data_to_hubspot(zoom_instance, hubspot_instance):
 
 # Replace the credentials with your actual Zoom and HubSpot API credentials
 zoom_instance = Zoom(client_id='ujqRRTR5Qey_e7oIAF3oMw', client_secret='9qfonnzQwiLDCsNO9xjrYR47BJOlg9SQ', account_id='WE69OOT2TFaXpWXLtGo7gg')
-hubspot_instance = HubSpot(api_key='pat-na1-8c60361a-6f8d-4e24-9b16-8296814c49eb')
+hubspot_instance = HubSpot(api_key='')
 
 # Call the function to integrate and send data
 send_zoom_data_to_hubspot(zoom_instance, hubspot_instance)
