@@ -9,7 +9,8 @@ import re
 import warnings
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
 import requests
 
 warnings.filterwarnings("ignore")
@@ -177,71 +178,6 @@ class Zoom:
                 print("Bad Request")
             raise e
         
-    # def get_meeting_attendance(self, meeting_date=None):
-    #     meetings = self.get_all_meetings()
-
-    #     if not meetings:
-    #         print("No meetings found.")
-    #         return
-
-    #     meeting_df = pd.DataFrame(meetings)
-    #     print("Columns in DataFrame:", meeting_df.columns)
-
-    #     if 'start_time' not in meeting_df.columns:
-    #         print("Error: 'start_time' column is missing.")
-    #         print("Available columns:", meeting_df.columns)
-    #         return
-
-    #     # Convert start_time to datetime with West Central Africa Time (WAT) timezone
-    #     meeting_df['start_time'] = pd.to_datetime(meeting_df['start_time']).dt.tz_convert('Africa/Lagos')  # WAT is typically represented by 'Africa/Lagos'
-
-    #     # Extract the meeting date
-    #     meeting_df['meeting_date'] = meeting_df['start_time'].dt.date
-
-    #     # If meeting_date is not provided, use the current date in the desired timezone
-    #     if meeting_date:
-    #         current_date = pd.to_datetime(meeting_date).date()  # Use specified date
-    #     else:
-    #         desired_timezone = pytz.timezone('Africa/Lagos')  # West Central Africa Time
-    #         current_datetime = datetime.now(desired_timezone)
-    #         current_date = current_datetime.date()
-
-    #     print(f"Filtering meetings for date: {current_date}")
-    #     print("Available meeting dates:", meeting_df['meeting_date'].unique())
-
-    #     # Filter the DataFrame for matching dates
-    #     filtered_row = meeting_df[meeting_df['meeting_date'] == current_date]
-
-    #     if filtered_row.empty:
-    #         print(f"No meetings scheduled for the specified date: {current_date}.")
-    #         return
-
-    #     # Process each filtered meeting
-    #     result = pd.DataFrame()
-    #     for i in range(len(filtered_row)):
-    #         meeting_to_process = filtered_row.iloc[i]
-    #         meeting_id = meeting_to_process['id']
-    #         topic = meeting_to_process['topic']
-    #         meeting_date = meeting_to_process['meeting_date']
-    #         meeting_duration = meeting_to_process['duration']
-    #         start_time = meeting_to_process['start_time']
-    #         attendance = self.get_meeting_participants(meeting_id)
-
-    #         # Combine meeting details with participant data
-    #         attendance_combined = [{**item, 'Topic': topic, 'meeting_date': meeting_date,
-    #                                 'meeting_duration': meeting_duration, 'start_time': start_time}
-    #                             for item in attendance]
-    #         attendance_combined = pd.DataFrame(attendance_combined)
-
-    #         # Process leave_time and calculate the maximum end_time
-    #         if 'leave_time' in attendance_combined.columns:
-    #             attendance_combined['leave_time'] = pd.to_datetime(attendance_combined['leave_time'])
-    #             attendance_combined['end_time'] = attendance_combined['leave_time'].max()
-
-    #         # Append the combined data to the result DataFrame
-    #         result = pd.concat([result, attendance_combined], ignore_index=True)
-
-    #     return result
 
     def get_meeting_attendance(self, meeting_date=None):
         meetings = self.get_all_meetings()
@@ -326,7 +262,143 @@ class Zoom:
             print("\n")
 
         return result
-# Replace the credentials with your actual Zoom API credentials
+
+class HubSpot:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.base_url = "https://api.hubapi.com"
+
+    def _create_headers(self):
+        return {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+
+    def update_contact_property(self, contact_id, properties):
+        url = f"{self.base_url}/crm/v3/objects/contacts/{contact_id}"
+        data = {
+            "properties": properties
+        }
+        response = requests.patch(url, headers=self._create_headers(), json=data)
+        response.raise_for_status()
+        return response.json()
+
+    def create_contact(self, email, properties):
+        url = f"{self.base_url}/crm/v3/objects/contacts"
+        data = {
+            "properties": {
+                "email": email,
+                **properties
+            }
+        }
+        response = requests.post(url, headers=self._create_headers(), json=data)
+        response.raise_for_status()
+        return response.json()
+
+    def find_contact_by_email(self, email):
+        url = f"{self.base_url}/crm/v3/objects/contacts/search"
+        data = {
+            "filterGroups": [{
+                "filters": [{
+                    "propertyName": "email",
+                    "operator": "EQ",
+                    "value": email
+                }]
+            }]
+        }
+        response = requests.post(url, headers=self._create_headers(), json=data)
+        response.raise_for_status()
+        results = response.json().get('results', [])
+        return results[0] if results else None
+
+
+
+
+def convert_to_midnight_utc(timestamp):
+    dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+    midnight_dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(midnight_dt.timestamp() * 1000)
+
+def format_datetime_for_hubspot(dt):
+    if pd.notnull(dt):
+        if isinstance(dt, str):
+            try:
+                # Assuming join and leave times are in ISO 8601 format; adjust as necessary
+                dt = datetime.fromisoformat(dt)
+            except ValueError:
+                print(f"Unable to parse date: {dt}")
+                return None
+        return dt.strftime('%Y-%m-%d %H:%M:%S')  # Format as a string
+    return None
+
+def calculate_total_duration(join_time_str, leave_time_str):
+    # Parse join and leave times
+    if join_time_str and leave_time_str:
+        try:
+            join_time = datetime.fromisoformat(join_time_str)
+            leave_time = datetime.fromisoformat(leave_time_str)
+            # Calculate the duration in minutes
+            total_duration = (leave_time - join_time).total_seconds() / 60  # Duration in minutes
+            return round(total_duration, 2)  # Round to two decimal places for precision
+        except ValueError:
+            print(f"Error parsing join or leave times: join_time={join_time_str}, leave_time={leave_time_str}")
+    return None
+
+def send_zoom_data_to_hubspot(zoom_instance, hubspot_instance):
+    # Extract meeting attendance data from Zoom
+    data = zoom_instance.get_meeting_attendance()
+
+    if data.empty:
+        print("No attendance data to send to HubSpot.")
+        return
+
+    # Iterate over each participant in the Zoom data
+    for index, row in data.iterrows():
+        email = row.get('user_email')
+        participant_name = row.get('name')
+        session_title = row.get('Session Title')
+        session_date = row.get('Session Date and Time')
+
+        # Ensure session_date is set to midnight UTC
+        if pd.notnull(session_date):
+            session_date = session_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            session_date_timestamp = int(session_date.timestamp() * 1000)
+            session_date_timestamp = convert_to_midnight_utc(session_date_timestamp)
+
+        # Additional participant details
+        join_time_str = row.get('join_time')
+        leave_time_str = row.get('leave_time')
+        join_time = format_datetime_for_hubspot(join_time_str)
+        leave_time = format_datetime_for_hubspot(leave_time_str)
+        total_duration = calculate_total_duration(join_time_str, leave_time_str)  # Calculate duration
+
+        # Find or create the contact in HubSpot
+        if email:
+            contact = hubspot_instance.find_contact_by_email(email)
+            properties = {
+                'firstname': participant_name.split()[0] if participant_name else '',
+                'lastname': participant_name.split()[-1] if participant_name else '',
+                'last_zoom_session_title': session_title,
+                'last_zoom_session_date': session_date_timestamp,
+                'zoom_participant_join_time': join_time,
+                'zoom_participant_leave_time': leave_time,
+                'zoom_participant_total_duration': total_duration  # Add calculated duration
+            }
+
+            if contact:
+                contact_id = contact['id']
+                # Update the contact with meeting data
+                hubspot_instance.update_contact_property(contact_id, properties)
+                print(f"Updated HubSpot contact {email} with session data.")
+            else:
+                # If the contact does not exist, create it
+                hubspot_instance.create_contact(email, properties)
+                print(f"Created new HubSpot contact for {email}.")
+
+# Replace the credentials with your actual Zoom and HubSpot API credentials
 zoom_instance = Zoom(client_id='ujqRRTR5Qey_e7oIAF3oMw', client_secret='9qfonnzQwiLDCsNO9xjrYR47BJOlg9SQ', account_id='WE69OOT2TFaXpWXLtGo7gg')
-data = zoom_instance.get_meeting_attendance()
-print(data)
+hubspot_instance = HubSpot(api_key='pat-na1-8c60361a-6f8d-4e24-9b16-8296814c49eb')
+
+# Call the function to integrate and send data
+send_zoom_data_to_hubspot(zoom_instance, hubspot_instance)
+
